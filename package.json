@@ -1,0 +1,18 @@
+{
+  "name": "pi-evolve",
+  "version": "0.1.0",
+  "description": "self-modifying hook extension for pi-coding-agent — implements HOOK_PROTOCOL v1 so opencode-evolve hooks run in pi unchanged",
+  "main": "src/evolve.ts",
+  "type": "module",
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.70.0"
+  },
+  "dependencies": {
+    "typebox": "^1.1.24"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.70.0",
+    "@types/node": "^25.3.0",
+    "typescript": "^5.9.3"
+  }
+}

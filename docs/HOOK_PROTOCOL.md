@@ -1,0 +1,1 @@
+../../opencode-evolve/docs/HOOK_PROTOCOL.md
