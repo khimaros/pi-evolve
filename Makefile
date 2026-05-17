@@ -1,16 +1,42 @@
-PI_BIN := pi
+TS_SOURCES := $(shell find src -name '*.ts' 2>/dev/null)
+PI_BIN     := pi
 
-build:
-	npx tsc --noEmit
-.PHONY: build
+.PHONY: build lint test test-integration precommit install update pack publish clean
 
-compile:
-	npx tsc
-.PHONY: compile
+.DEFAULT_GOAL := build
 
-test-integration:
-	PI_BIN=$(PI_BIN) python3 ./tests/pi_integration_test.py
-.PHONY: test-integration
+build: node_modules
+	@npm run build
 
-precommit: build test-integration
-.PHONY: precommit
+node_modules: package.json package-lock.json
+	@npm install
+	@touch node_modules
+
+lint: node_modules
+	@echo "==> lint"
+	@npx tsc --noEmit
+
+test: test-integration
+
+test-integration: build
+	@echo "==> integration test"
+	@PI_BIN=$(PI_BIN) python3 ./tests/pi_integration_test.py
+
+precommit: lint test
+
+install:
+	@npm install -g .
+
+pack: build
+	@mkdir -p build
+	@npm pack --pack-destination build
+
+publish: build
+	@npm publish --access public
+
+update:
+	@npm update
+	@touch node_modules
+
+clean:
+	@rm -rf dist build tests/.artifacts

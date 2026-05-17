@@ -1,13 +1,13 @@
 /**
- * pi-evolve — pi-coding-agent extension implementing HOOK_PROTOCOL v1.
+ * pi-evolve — pi-coding-agent extension implementing the hook protocol.
  *
  * loads executable hook scripts from $EVOLVE_WORKSPACE/hooks/, registers their
  * declared tools, and invokes lifecycle stages (mutate_request, observe_message,
- * idle, heartbeat, compacting, tool_before/after, execute_tool, recover,
+ * before_stop, heartbeat, compacting, before_tool/after_tool, execute_tool, recover,
  * format_notification) by forking a subprocess per call with JSON on stdin and
  * JSONL on stdout. existing opencode-evolve hooks run unchanged.
  *
- * see docs/HOOK_PROTOCOL.md for the wire contract.
+ * see https://github.com/khimaros/hcp-spec/ for the wire contract.
  */
 
 import * as fs from "node:fs";
@@ -15,17 +15,18 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawn } from "node:child_process";
 import { Type, type TSchema } from "typebox";
-import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolResultEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import {
 	convertToLlm,
 	createAgentSession,
 	DefaultResourceLoader,
+	formatSkillsForPrompt,
 	getAgentDir,
 	serializeConversation,
 	SessionManager,
 	SettingsManager,
-} from "@mariozechner/pi-coding-agent";
-import { complete } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-coding-agent";
+import { complete } from "@earendil-works/pi-ai";
 
 // shape of a tool result expected by pi: { content: [...], details, terminate? }
 function textResult(text: string) {
@@ -57,16 +58,24 @@ const STATE_FILE = path.join(STATE_DIR, "evolve.json");
 const PROMPT_FILES = ["preamble", "chat", "heartbeat", "compaction", "recover"] as const;
 type PromptStage = (typeof PROMPT_FILES)[number];
 
-// observational stages don't trigger recover on failure
-const OBSERVATIONAL_STAGES = new Set([
-	"observe_message",
-	"format_notification",
-	"tool_before",
-	"tool_after",
-]);
+// stages whose failure triggers a recover cascade. whitelist (not
+// blacklist) so new stages opt in explicitly — the recover path
+// re-enters the LLM with synthetic system+user, so the default for any
+// observational stage must be "no cascade". current members feed text
+// back into the request: mutate_request composes the system prompt;
+// heartbeat injects an autonomous user turn. before_stop is excluded
+// deliberately — recover-induced re-entry on a stage that exists to
+// signal loop termination is a footgun.
+const RECOVER_HOOKS = new Set(["mutate_request", "heartbeat"]);
 
 const HOOK_TIMEOUT_MS = Number(process.env.EVOLVE_HOOK_TIMEOUT_MS) || 30_000;
 const HEARTBEAT_INTERVAL_MS = Number(process.env.EVOLVE_HEARTBEAT_MS) || 1_800_000;
+
+// append Pi's stock available_skills block to the workspace-built system
+// prompt so downstream extensions (e.g. pi-skillful) that target that section
+// by regex can still find and patch it. on by default; opt out with
+// EVOLVE_PRESERVE_SKILLS=0.
+const PRESERVE_SKILLS = process.env.EVOLVE_PRESERVE_SKILLS !== "0";
 
 // ─── small helpers ──────────────────────────────────────────────────────────
 
@@ -164,7 +173,8 @@ async function runHookScript(scriptPath: string, stage: string, ctx: Record<stri
 			resolve(merged);
 		});
 
-		child.stdin.write(JSON.stringify({ hook: stage, prompts: loadPrompts(), ...ctx }));
+		const host = { name: "pi-evolve", version: 2, stages: ["discover", "mutate_request", "before_tool", "after_tool", "execute_tool", "before_stop", "observe_message", "format_notification", "heartbeat", "compacting", "recover"] };
+		child.stdin.write(JSON.stringify({ hook: stage, host, prompts: loadPrompts(), ...ctx }));
 		child.stdin.end();
 	});
 }
@@ -228,7 +238,7 @@ async function runStageAll(stage: string, ctx: Record<string, any>): Promise<Hoo
 			mergeResult(merged, r);
 		} catch (err) {
 			debugLog(`${hook.scriptBase}:${stage} failed: ${(err as Error).message}`);
-			if (!OBSERVATIONAL_STAGES.has(stage) && stage !== "recover") {
+			if (RECOVER_HOOKS.has(stage)) {
 				try {
 					const recover = await runHookScript(hook.scriptPath, "recover", {
 						error: (err as Error).message,
@@ -611,12 +621,34 @@ export default async function evolveExtension(pi: ExtensionAPI): Promise<void> {
 		registerDiscoveredTools(pi, hook);
 	}
 
-	// mutate_request → before_agent_start
-	pi.on("before_agent_start", async (event) => {
-		const r = await runStageAll("mutate_request", { session: { id: "current" }, history: [] });
+	// mutate_request → before_agent_start. surfaces finalized system /
+	// user / model in the payload (parity with airun). user is the most
+	// recent user message text from the agent's prepared messages, when
+	// available; tools is deferred (pi's API doesn't expose the tool list
+	// at this hook point).
+	pi.on("before_agent_start", async (event: any) => {
+		const msgs: any[] = Array.isArray(event?.messages) ? event.messages : [];
+		const lastUser = [...msgs].reverse().find((m: any) => m?.role === "user");
+		const userText = Array.isArray(lastUser?.content)
+			? lastUser.content.filter((c: any) => c?.type === "text").map((c: any) => c.text || "").join("")
+			: (typeof lastUser?.content === "string" ? lastUser.content : "");
+		const r = await runStageAll("mutate_request", {
+			session: { id: "current" },
+			history: msgs,
+			system: event?.systemPrompt || "",
+			user: userText,
+			model: typeof event?.model === "string" ? event.model : (event?.model?.id || ""),
+		});
 		await applyActions(pi, r.actions);
 		if (Array.isArray(r.system) && r.system.length > 0) {
-			return { systemPrompt: [event.systemPrompt, ...r.system].filter(Boolean).join("\n\n") };
+			const replaced = r.system.filter(Boolean).join("\n\n");
+			if (replaced) {
+				const skills = event?.systemPromptOptions?.skills;
+				if (PRESERVE_SKILLS && Array.isArray(skills) && skills.length > 0) {
+					return { systemPrompt: `${replaced}\n\n${formatSkillsForPrompt(skills)}` };
+				}
+				return { systemPrompt: replaced };
+			}
 		}
 		return undefined;
 	});
@@ -654,14 +686,14 @@ export default async function evolveExtension(pi: ExtensionAPI): Promise<void> {
 		const answer = Array.isArray(msg?.content)
 			? msg.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n")
 			: "";
-		runStageAll("idle", { session: { id: "current", agent: "evolve" }, answer })
+		runStageAll("before_stop", { session: { id: "current", agent: "evolve" }, answer })
 			.then(async (r) => {
 				if (typeof r.continue === "string" && r.continue.trim() && ctx.isIdle()) {
 					pi.sendUserMessage(r.continue);
 				}
 				await applyActions(pi, r.actions);
 			})
-			.catch((e) => debugLog(`idle hook failed: ${(e as Error).message}`));
+			.catch((e) => debugLog(`before_stop hook failed: ${(e as Error).message}`));
 	});
 
 	// compacting → session_before_compact. when the hook returns a custom
@@ -739,24 +771,39 @@ export default async function evolveExtension(pi: ExtensionAPI): Promise<void> {
 		}
 	});
 
-	// tool_before / tool_after — observational
+	// before_tool — honor `deny` by translating to pi's {block, reason}.
+	// hook-returned `result` (synthetic substitute without execution) is
+	// not supported on pi without a custom-tool path; we log and ignore it.
 	pi.on("tool_call", async (event: ToolCallEvent, ctx) => {
-		await runStageAll("tool_before", {
+		const r = await runStageAll("before_tool", {
 			session: { id: "current" },
 			tool: (event as any).toolName ?? "unknown",
 			callID: event.toolCallId,
 			args: (event as any).args ?? {},
-		}).catch(() => undefined);
+		}).catch(() => ({} as any));
+		if (typeof r?.deny === "string" && r.deny) {
+			return { block: true, reason: r.deny };
+		}
+		if (typeof r?.result === "string" && r.result) {
+			debugLog("before_tool: synthetic `result` substitution not supported on pi; ignoring");
+		}
+		return undefined;
 	});
 
+	// after_tool — honor `result` by translating to pi's
+	// {content: [{type: "text", text}]} replacement.
 	pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
-		await runStageAll("tool_after", {
+		const r = await runStageAll("after_tool", {
 			session: { id: "current" },
 			tool: (event as any).toolName ?? "unknown",
 			callID: event.toolCallId,
 			title: "",
 			output: typeof (event as any).result === "string" ? (event as any).result : JSON.stringify((event as any).result ?? ""),
-		}).catch(() => undefined);
+		}).catch(() => ({} as any));
+		if (typeof r?.result === "string" && r.result) {
+			return { content: [{ type: "text", text: r.result }] };
+		}
+		return undefined;
 	});
 
 	// heartbeat — timer-driven autonomous prompts. registered per-session via

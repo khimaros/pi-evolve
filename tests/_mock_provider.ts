@@ -4,7 +4,7 @@
  * pi_integration_test.py to capture the actual LLM HTTP request that pi
  * issues when the evolve extension is loaded.
  */
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
 	const baseUrl = process.env.EVOLVE_TEST_MOCK_BASE_URL;

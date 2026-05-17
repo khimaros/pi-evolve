@@ -1,19 +1,37 @@
 # pi-evolve
 
-self-modifying hook extension for [pi-coding-agent](https://pi.dev). implements [HOOK_PROTOCOL v1](docs/HOOK_PROTOCOL.md) so existing [opencode-evolve](https://github.com/khimaros/opencode-evolve) hook scripts run in pi unchanged.
+self-modifying hook extension for [pi-coding-agent](https://pi.dev).
+implements the [harness control protocol](https://github.com/khimaros/hcp-spec/)
+so existing [opencode-evolve](https://github.com/khimaros/opencode-evolve) hook
+scripts run in pi unchanged.
 
-## installation
+## getting started
+
+prerequisites:
+
+- node.js 20+
+- a working pi installation
+
+install as a pi extension:
 
 ```bash
-npm install
-ln -s "$(pwd)/src/evolve.ts" ~/.pi/agent/extensions/evolve.ts
+pi install npm:@khimaros/pi-evolve
 ```
 
-set `EVOLVE_WORKSPACE` to your workspace directory (default: `~/workspace`). `OPENCODE_EVOLVE_WORKSPACE` is honored as a fallback for cross-host workspaces.
+or from a source checkout:
+
+```bash
+make            # install deps + build
+make install    # install globally from this checkout
+```
+
+set `EVOLVE_WORKSPACE` to your workspace directory (default: `~/workspace`).
+`OPENCODE_EVOLVE_WORKSPACE` is honored as a fallback for cross-host workspaces.
 
 ## workspace layout
 
-see [HOOK_PROTOCOL.md](docs/HOOK_PROTOCOL.md). same shape as opencode-evolve:
+same shape as opencode-evolve (the workspace layout below is a host-specific
+extension, not part of the hcp protocol itself):
 
 ```
 $WORKSPACE/
@@ -24,10 +42,38 @@ $WORKSPACE/
 └── tests/                  # per-hook validation scripts
 ```
 
+## architecture
+
+```
+src/
+  extension/   pi extension entry — loads hook scripts, registers tools,
+               dispatches lifecycle stages (mutate_request, observe_message,
+               before_stop, heartbeat, compacting, before_tool/after_tool,
+               execute_tool, recover, format_notification)
+tests/         python integration tests (spawn pi with this extension)
+examples/      reference hook workspaces
+```
+
+## development
+
+```bash
+make            # install deps + build (tsc)
+make lint       # tsc --noEmit
+make test       # build + run integration tests
+make precommit  # lint + test
+make install    # install globally from this checkout
+make pack       # npm pack into build/
+make publish    # npm publish --access public
+make clean      # rm -rf dist build tests/.artifacts
+```
+
 ## status
 
-first cut. the lifecycle stages all map to documented pi extension events; see ROADMAP.md for what's wired vs deferred.
+first cut. the lifecycle stages all map to documented pi extension events;
+see [ROADMAP.md](ROADMAP.md) for what's wired vs deferred.
 
 ## relationship to opencode-evolve
 
-pi-evolve is the second reference implementation of HOOK_PROTOCOL v1. opencode-evolve is the first. both run identical hook scripts. the spec lives in opencode-evolve and is mirrored here via symlink under `docs/`.
+pi-evolve is one of three reference implementations of the
+[harness control protocol](https://github.com/khimaros/hcp-spec/), alongside
+opencode-evolve and airun. all three run identical hook scripts.

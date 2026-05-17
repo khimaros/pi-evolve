@@ -32,9 +32,11 @@ from pathlib import Path
 
 PASS = FAIL = 0
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-EXTENSION_PATH = PROJECT_ROOT / "src" / "evolve.ts"
+EXTENSION_PATH = PROJECT_ROOT / "src" / "extension" / "index.ts"
 PROVIDER_FIXTURE = PROJECT_ROOT / "tests" / "_mock_provider.ts"
 TRIGGER_COMPACT_FIXTURE = PROJECT_ROOT / "tests" / "_trigger_compact.ts"
+SKILL_FIXTURE_DIR = PROJECT_ROOT / "tests" / "_skill_fixture"
+SKILL_FIXTURE_NAME = "evolve-test-skill"
 EXAMPLES_HELLO = (PROJECT_ROOT / "examples" / "hello").resolve()
 HELLO_PROMPTS = EXAMPLES_HELLO / "prompts"
 ARTIFACTS = PROJECT_ROOT / "tests" / ".artifacts"
@@ -47,12 +49,10 @@ PI_BIN = os.environ.get("PI_BIN", "pi")
 HEARTBEAT_MS = 500
 STALL_SECONDS = 5
 
-# the mock openai-compatible server is shared with opencode-evolve so both
-# integration tests use the same SSE response format and capture interface.
-SHARED_TESTS_DIR = (PROJECT_ROOT / ".." / "opencode-evolve" / "tests").resolve()
-if not (SHARED_TESTS_DIR / "mock_openai.py").exists():
-    sys.exit(f"FAIL: shared mock_openai.py not found at {SHARED_TESTS_DIR}")
-sys.path.insert(0, str(SHARED_TESTS_DIR))
+# the mock openai-compatible server is shared across all hcp host
+# implementations; the canonical copy lives in hcp-spec/testing/ and is
+# symlinked into tests/mock_openai.py here.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mock_openai import MockOpenAIServer, is_heartbeat_request  # noqa: E402
 
 
@@ -91,6 +91,7 @@ def run_pi(workspace: Path, base_url: str, *,
            extra_env: dict | None = None,
            session_dir: Path | None = None,
            extra_messages: list[str] | None = None,
+           extra_skills: list[Path] | None = None,
            timeout: int = 45) -> tuple[str, str]:
     env = {
         **os.environ,
@@ -119,6 +120,10 @@ def run_pi(workspace: Path, base_url: str, *,
     cmd += [
         "--no-extensions",
         "--no-context-files",
+    ]
+    for skill in extra_skills or []:
+        cmd += ["--skill", str(skill)]
+    cmd += [
         "--provider", "mock",
         "--model", "mock/mock-model",
         "-p", "hello",
@@ -298,6 +303,8 @@ def main() -> int:
               heartbeat_body not in sys_text, sys_text[:500])
         check("build: system prompt contains <env> block",
               "<env>" in sys_text and "</env>" in sys_text, sys_text[:500])
+        check("build: system prompt does NOT include pi's default preamble (hook should replace, not append)",
+              "expert coding assistant operating inside pi" not in sys_text, sys_text[:500])
 
         # --- heartbeat request ---
 
@@ -399,6 +406,76 @@ def main() -> int:
                       not compact_cap["body"].get("tools"), repr(compact_cap["body"].get("tools")))
     finally:
         cmock.shutdown()
+
+    # ─── scenario 3: EVOLVE_PRESERVE_SKILLS ────────────────────────────────
+    # pi-evolve's mutate_request handler replaces the system prompt
+    # wholesale, which would drop Pi's stock available_skills block —
+    # breaking downstream extensions (e.g. pi-skillful) that target that
+    # block by regex. The handler appends Pi's formatted skills section
+    # back to the workspace-built prompt by default; opt out with
+    # EVOLVE_PRESERVE_SKILLS=0.
+    #
+    # Run twice with a --skill fixture: default (on), and explicit opt-out.
+    for label, env_extra, expect_skills in (
+        ("preserve-skills default", {}, True),
+        ("preserve-skills off", {"EVOLVE_PRESERVE_SKILLS": "0"}, False),
+    ):
+        smock = MockOpenAIServer()
+        smock.start()
+        print(f"\n{label} mock server on {smock.base_url}")
+        try:
+            with tempfile.TemporaryDirectory(prefix="pi-evolve-skills-") as tmp:
+                ws = make_workspace(Path(tmp))
+                stdout, stderr = run_pi(
+                    ws, smock.base_url,
+                    extra_skills=[SKILL_FIXTURE_DIR],
+                    extra_env={
+                        "EVOLVE_HEARTBEAT_MS": "-1",
+                        **env_extra,
+                    },
+                )
+                slug = label.replace(" ", "_")
+                (ARTIFACTS / f"pi_integration.skills_{slug}.stdout.log").write_text(stdout)
+                (ARTIFACTS / f"pi_integration.skills_{slug}.stderr.log").write_text(stderr)
+                smock.shutdown()
+
+                with smock.lock:
+                    s_chat = next(
+                        (c for c in smock.captured
+                         if "chat/completions" in c["path"]
+                         and c["body"].get("tools")
+                         and not is_heartbeat_request(c["body"])),
+                        None,
+                    )
+
+                check(f"skills [{label}]: build chat request captured", s_chat is not None,
+                      f"stderr tail:\n{stderr[-500:]}")
+                if not s_chat:
+                    continue
+
+                s_sys = extract_system_text(s_chat["body"])
+                (ARTIFACTS / f"pi_integration.skills_{slug}.system.txt").write_text(s_sys)
+
+                # the marker phrase used by pi-skillful's regex
+                marker = "The following skills provide specialized instructions"
+                has_marker = marker in s_sys
+                has_envelope = "</available_skills>" in s_sys
+                has_fixture = SKILL_FIXTURE_NAME in s_sys
+
+                if expect_skills:
+                    check(f"skills [{label}]: available_skills marker present",
+                          has_marker, s_sys[-1500:])
+                    check(f"skills [{label}]: available_skills envelope closed",
+                          has_envelope, s_sys[-1500:])
+                    check(f"skills [{label}]: fixture skill name appears in prompt",
+                          has_fixture, s_sys[-1500:])
+                else:
+                    check(f"skills [{label}]: available_skills marker absent",
+                          not has_marker, s_sys[-1500:])
+                    check(f"skills [{label}]: fixture skill name absent",
+                          not has_fixture, s_sys[-1500:])
+        finally:
+            smock.shutdown()
 
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1

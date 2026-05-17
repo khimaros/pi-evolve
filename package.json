@@ -1,17 +1,47 @@
 {
-  "name": "pi-evolve",
+  "name": "@khimaros/pi-evolve",
   "version": "0.1.0",
-  "description": "self-modifying hook extension for pi-coding-agent — implements HOOK_PROTOCOL v1 so opencode-evolve hooks run in pi unchanged",
-  "main": "src/evolve.ts",
+  "description": "self-modifying hook extension for pi-coding-agent — implements the hook protocol so opencode-evolve hooks run in pi unchanged",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khimaros/pi-evolve.git"
+  },
+  "homepage": "https://github.com/khimaros/pi-evolve#readme",
+  "bugs": {
+    "url": "https://github.com/khimaros/pi-evolve/issues"
+  },
   "type": "module",
+  "main": "dist/extension/index.js",
+  "exports": {
+    ".": "./dist/extension/index.js"
+  },
+  "pi": {
+    "extensions": ["dist/extension/index.js"]
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "python3 ./tests/pi_integration_test.py"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.70.0"
+    "@earendil-works/pi-coding-agent": "^0.74.0"
   },
   "dependencies": {
     "typebox": "^1.1.24"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.70.0",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
     "@types/node": "^25.3.0",
     "typescript": "^5.9.3"
   }

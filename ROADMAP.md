@@ -7,9 +7,12 @@
 - [ ] heartbeat: cleanup modes (`none` / `new` / `archive` / `compact`) and thresholds (count / tokens). session isolation is wired (each heartbeat spawns a fresh in-process `AgentSession` with its own system prompt via `createAgentSession` + `DefaultResourceLoader.systemPrompt`); cleanup-on-threshold semantics are not yet implemented.
 - [ ] heartbeat subagent tool surface: the fresh agent session runs with `noExtensions: true` (to prevent recursive heartbeat loading), so hello's `hello_note_*` tools are not available inside heartbeat turns. opencode-evolve heartbeats have full access. options: pass our discovered tools via `customTools` on `createAgentSession`, or pass our extension factory via `extensionFactories` on the loader with a flag suppressing the timer.
 - [ ] git auto-init of workspace + auto-commit after tool/heartbeat
-- [ ] permissions field passthrough — pi has its own permission system; map `permission.arg` to pi's permission gate (or settle for "*" allow/deny in v1)
-- [ ] expand integration test to cover idle continuation, heartbeat, observe_message, tool_before/after, recover (current test asserts on dump-request payload only — doesn't exercise the agent loop)
+- [ ] permissions field passthrough — pi has its own permission system; map `permission.arg` to pi's permission gate (or settle for "*" allow/deny initially)
+- [ ] expand integration test to cover before_stop continuation, heartbeat, observe_message, before_tool/after_tool, recover (current test asserts on dump-request payload only — doesn't exercise the agent loop)
 - [ ] verify all of opencode-evolve's `examples/hello` hooks behave identically under pi-evolve (currently symlinked; pi-evolve passes the same prompts contract through)
+- [ ] hook protocol — `before_tool.result` synthetic-skip support. pi has no API for this without a custom-tool path.
+- [ ] hook protocol — `mutate_request.tools` payload. pi-coding-agent does not expose the tool list at the relevant hook point.
+- [ ] hook protocol — `before_turn` / `after_turn` / `on_error` / `on_permission` stages.
 
 ## done
 
