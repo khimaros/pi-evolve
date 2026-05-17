@@ -1,6 +1,6 @@
 {
   "name": "@khimaros/pi-evolve",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "self-modifying hook extension for pi-coding-agent — implements the hook protocol so opencode-evolve hooks run in pi unchanged",
   "keywords": [
     "pi-package"
@@ -29,7 +29,11 @@
   ],
   "scripts": {
     "build": "tsc",
+    "prepack": "npm run build",
     "test": "python3 ./tests/pi_integration_test.py"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=20"
