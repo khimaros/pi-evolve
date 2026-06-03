@@ -224,7 +224,7 @@ def main() -> int:
         check("extension load: pi-evolve loaded line in stderr",
               "pi-evolve loaded" in stderr, stderr[-500:])
         check("discover: hello hook registered as 'hello'",
-              'discovered evolve.py as "hello"' in stderr, stderr[-500:])
+              'discovered hello.py as "hello"' in stderr, stderr[-500:])
 
         check("build chat/completions request captured", chat_req is not None,
               f"captured paths: {captured_paths}\nstderr tail:\n{stderr[-1000:]}")
