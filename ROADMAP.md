@@ -4,6 +4,7 @@
 
 ## todo
 
+- [x] bump to pi-coding-agent `^0.79.6`: declare the previously-undeclared `@earendil-works/pi-ai` runtime import (the `complete` API) as a direct dependency, since 0.79.6 no longer hoists it where tsc/node could find it. mark the pi-coding-agent peer `optional` so a global install resolves the host agent instead of nesting a redundant full copy.
 - [ ] heartbeat: cleanup modes (`none` / `new` / `archive` / `compact`) and thresholds (count / tokens). session isolation is wired (each heartbeat spawns a fresh in-process `AgentSession` with its own system prompt via `createAgentSession` + `DefaultResourceLoader.systemPrompt`); cleanup-on-threshold semantics are not yet implemented.
 - [ ] heartbeat subagent tool surface: the fresh agent session runs with `noExtensions: true` (to prevent recursive heartbeat loading), so hello's `hello_note_*` tools are not available inside heartbeat turns. opencode-evolve heartbeats have full access. options: pass our discovered tools via `customTools` on `createAgentSession`, or pass our extension factory via `extensionFactories` on the loader with a flag suppressing the timer.
 - [ ] git auto-init of workspace + auto-commit after tool/heartbeat

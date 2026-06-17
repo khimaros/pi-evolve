@@ -1,6 +1,6 @@
 {
   "name": "@khimaros/pi-evolve",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "self-modifying hook extension for pi-coding-agent — implements the hook protocol so opencode-evolve hooks run in pi unchanged",
   "keywords": [
     "pi-package"
@@ -20,7 +20,9 @@
     ".": "./dist/extension/index.js"
   },
   "pi": {
-    "extensions": ["dist/extension/index.js"]
+    "extensions": [
+      "dist/extension/index.js"
+    ]
   },
   "files": [
     "dist",
@@ -39,14 +41,25 @@
     "node": ">=20"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0"
+    "@earendil-works/pi-coding-agent": "^0.79.6"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "^0.79.6",
     "typebox": "^1.1.24"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.79.6",
     "@types/node": "^25.3.0",
     "typescript": "^5.9.3"
+  },
+  "allowScripts": {
+    "@google/genai@1.52.0": true,
+    "protobufjs@7.6.4": true,
+    "protobufjs@7.5.9": true
   }
 }
