@@ -1,5 +1,5 @@
 /**
- * pi-evolve — pi-coding-agent extension implementing the hook protocol.
+ * pi-evolve -- pi-coding-agent extension implementing the hook protocol.
  *
  * loads executable hook scripts from $EVOLVE_WORKSPACE/hooks/, registers their
  * declared tools, and invokes lifecycle stages (mutate_request, observe_message,
@@ -33,7 +33,7 @@ function textResult(text: string) {
 	return { content: [{ type: "text" as const, text }], details: undefined };
 }
 
-// untyped tool registration — avoids TypeBox-induced deep type instantiation
+// untyped tool registration -- avoids TypeBox-induced deep type instantiation
 // across many registerTool calls in this file.
 function regTool(pi: ExtensionAPI, def: any): void {
 	(pi.registerTool as (d: any) => void)(def);
@@ -54,17 +54,17 @@ const TESTS_DIR = path.join(WORKSPACE, "tests");
 const STATE_DIR = path.join(WORKSPACE, "state");
 const STATE_FILE = path.join(STATE_DIR, "evolve.json");
 
-// prompt contract — fixed filenames the host loads and injects as ctx.prompts
+// prompt contract -- fixed filenames the host loads and injects as ctx.prompts
 const PROMPT_FILES = ["preamble", "chat", "heartbeat", "compaction", "recover"] as const;
 type PromptStage = (typeof PROMPT_FILES)[number];
 
 // stages whose failure triggers a recover cascade. whitelist (not
-// blacklist) so new stages opt in explicitly — the recover path
+// blacklist) so new stages opt in explicitly -- the recover path
 // re-enters the LLM with synthetic system+user, so the default for any
 // observational stage must be "no cascade". current members feed text
 // back into the request: mutate_request composes the system prompt;
 // heartbeat injects an autonomous user turn. before_stop is excluded
-// deliberately — recover-induced re-entry on a stage that exists to
+// deliberately -- recover-induced re-entry on a stage that exists to
 // signal loop termination is a footgun.
 const RECOVER_HOOKS = new Set(["mutate_request", "heartbeat"]);
 
@@ -771,7 +771,7 @@ export default async function evolveExtension(pi: ExtensionAPI): Promise<void> {
 		}
 	});
 
-	// before_tool — honor `deny` by translating to pi's {block, reason}.
+	// before_tool -- honor `deny` by translating to pi's {block, reason}.
 	// hook-returned `result` (synthetic substitute without execution) is
 	// not supported on pi without a custom-tool path; we log and ignore it.
 	pi.on("tool_call", async (event: ToolCallEvent, ctx) => {
@@ -790,7 +790,7 @@ export default async function evolveExtension(pi: ExtensionAPI): Promise<void> {
 		return undefined;
 	});
 
-	// after_tool — honor `result` by translating to pi's
+	// after_tool -- honor `result` by translating to pi's
 	// {content: [{type: "text", text}]} replacement.
 	pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
 		const r = await runStageAll("after_tool", {
@@ -806,7 +806,7 @@ export default async function evolveExtension(pi: ExtensionAPI): Promise<void> {
 		return undefined;
 	});
 
-	// heartbeat — timer-driven autonomous prompts. registered per-session via
+	// heartbeat -- timer-driven autonomous prompts. registered per-session via
 	// session_start so we capture an ExtensionContext (for ctx.model and
 	// ctx.modelRegistry); timer is .unref()'d so it doesn't block process exit.
 	// EVOLVE_HEARTBEAT_MS < 0 disables the heartbeat (matches opencode-evolve
@@ -852,7 +852,7 @@ async function fireHeartbeat(pi: ExtensionAPI, ctx: ExtensionContext): Promise<v
 					pi.sendUserMessage(`[heartbeat] ${user}`, { deliverAs: "followUp" });
 				}
 			} else {
-				// fallback when no model is configured — queue as a follow-up
+				// fallback when no model is configured -- queue as a follow-up
 				// turn in the current session. system prompt is unchanged.
 				pi.sendUserMessage(`[heartbeat] ${user}`, { deliverAs: "followUp" });
 			}

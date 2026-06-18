@@ -5,8 +5,10 @@ PI_BIN     := pi
 
 .DEFAULT_GOAL := build
 
+# no build step: pi loads src/extension/index.ts directly via its jiti loader
+# (a pure extension, no bin). "build" type-checks the source.
 build: node_modules
-	@npm run build
+	@npm run typecheck
 
 node_modules: package.json package-lock.json
 	@npm install

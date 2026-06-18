@@ -3,21 +3,24 @@
 
 mirrors opencode-evolve's opencode_integration_test.py:
 
-  1. spawn a local http server (MockOpenAIServer, shared with opencode-evolve)
-     impersonating an openai chat-completions endpoint
-  2. load a test-fixture extension that registers a "mock" provider pointing at
-     that server (api: "openai-completions")
+  1. spawn the shared fake-openai binary as a subprocess impersonating an openai
+     chat-completions endpoint
+  2. write a `models.json` defining a "mock" openai-completions provider that
+     points at that server, under an isolated PI_CODING_AGENT_DIR. this drives
+     pi's stock custom-provider config path end-to-end rather than injecting a
+     registerProvider test fixture
   3. seed a temp workspace from `examples/hello/` so we run against the actual
      production hook, not a synthetic fixture
-  4. run `pi -p "hello" --provider mock --model mock/mock-model`
+  4. run `pi -p "hello" --provider mock --model mock/fake-model`
   5. assert the captured chat-completions requests:
        - build request: hello tools registered, system prompt has hello's
          preamble + chat verbatim, <env> block, no heartbeat content
        - heartbeat request (fired during a stalled build): [heartbeat] prefix,
          hello's heartbeat body, system has preamble + heartbeat but NOT chat
 
-the test requires no api key (mock provider) and depends on no user-installed
-pi extension. EVOLVE_TEST_MOCK_API_KEY is the fake key the provider reads.
+the test requires no real api key and depends on no user-installed pi extension.
+the agent dir is isolated per scenario so the user's real ~/.pi/agent is never
+touched. MOCK_API_KEY is the fake key written into models.json.
 """
 
 import json
@@ -28,12 +31,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from pathlib import Path
 
 PASS = FAIL = 0
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EXTENSION_PATH = PROJECT_ROOT / "src" / "extension" / "index.ts"
-PROVIDER_FIXTURE = PROJECT_ROOT / "tests" / "_mock_provider.ts"
 TRIGGER_COMPACT_FIXTURE = PROJECT_ROOT / "tests" / "_trigger_compact.ts"
 SKILL_FIXTURE_DIR = PROJECT_ROOT / "tests" / "_skill_fixture"
 SKILL_FIXTURE_NAME = "evolve-test-skill"
@@ -43,17 +46,57 @@ ARTIFACTS = PROJECT_ROOT / "tests" / ".artifacts"
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 PI_BIN = os.environ.get("PI_BIN", "pi")
 
-# mock server pacing — short heartbeat interval + a stall on the first build
+# mock server pacing -- short heartbeat interval + a stall on the first build
 # request gives the heartbeat timer room to fire inside the still-alive pi
 # process before the build response arrives.
 HEARTBEAT_MS = 500
 STALL_SECONDS = 5
 
-# the mock openai-compatible server is shared across all hcp host
-# implementations; the canonical copy lives in hcp-spec/testing/ and is
-# symlinked into tests/mock_openai.py here.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mock_openai import MockOpenAIServer, is_heartbeat_request  # noqa: E402
+# the mock is the shared, language-agnostic fake-openai binary, driven through
+# its python client on the sibling ../fake-openai checkout.
+sys.path.insert(0, str(PROJECT_ROOT.parent / "fake-openai" / "clients" / "python"))
+import fakeopenai
+
+# the mock provider is configured through pi's stock models.json custom-provider
+# path (~/.pi/agent/models.json, relocated per-scenario via PI_CODING_AGENT_DIR)
+# instead of a registerProvider extension. matches `--provider/--model` below.
+MOCK_PROVIDER = "mock"
+MOCK_MODEL_ID = "fake-model"
+MOCK_MODEL = f"{MOCK_PROVIDER}/{MOCK_MODEL_ID}"
+MOCK_API_KEY = "test"
+
+
+def write_models_json(agent_dir: Path, base_url: str):
+    """seed an isolated PI_CODING_AGENT_DIR with a models.json defining the mock
+    openai-completions provider at base_url. apiKey is sent as a bearer token;
+    fake-openai ignores it. returns agent_dir."""
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "models.json").write_text(json.dumps({
+        "providers": {
+            MOCK_PROVIDER: {
+                "baseUrl": base_url,
+                "api": "openai-completions",
+                "apiKey": MOCK_API_KEY,
+                "models": [{
+                    "id": MOCK_MODEL_ID,
+                    "name": "Fake Model",
+                    "contextWindow": 200000,
+                    "maxTokens": 4096,
+                }],
+            }
+        }
+    }, indent=2))
+    return agent_dir
+
+
+fetch_captures = fakeopenai.captures
+is_heartbeat_request = fakeopenai.is_heartbeat_request
+
+
+def start_fake_openai(*args):
+    """launch fake-openai on a free port; return (proc, base_url, admin_url)."""
+    f = fakeopenai.FakeOpenAI(*args).start()
+    return f.proc, f.base_url, f.admin_url
 
 
 # --- assertion helper ---
@@ -93,13 +136,16 @@ def run_pi(workspace: Path, base_url: str, *,
            extra_messages: list[str] | None = None,
            extra_skills: list[Path] | None = None,
            timeout: int = 45) -> tuple[str, str]:
+    # isolate the agent dir per run so we read our generated models.json (and
+    # never touch the user's real ~/.pi/agent). sits beside the workspace under
+    # the scenario's tempdir, so it is cleaned up with it.
+    agent_dir = write_models_json(workspace.parent / "agent", base_url)
     env = {
         **os.environ,
         "EVOLVE_WORKSPACE": str(workspace),
         "EVOLVE_DEBUG": "1",
         "EVOLVE_HEARTBEAT_MS": str(HEARTBEAT_MS),
-        "EVOLVE_TEST_MOCK_BASE_URL": base_url,
-        "EVOLVE_TEST_MOCK_API_KEY": "test",
+        "PI_CODING_AGENT_DIR": str(agent_dir),
         "PI_OFFLINE": "1",
         "CI": "1",
         **(extra_env or {}),
@@ -107,7 +153,6 @@ def run_pi(workspace: Path, base_url: str, *,
     cmd = [
         PI_BIN,
         "-e", str(EXTENSION_PATH),
-        "-e", str(PROVIDER_FIXTURE),
     ]
     for ext in extra_extensions or []:
         cmd += ["-e", str(ext)]
@@ -124,8 +169,8 @@ def run_pi(workspace: Path, base_url: str, *,
     for skill in extra_skills or []:
         cmd += ["--skill", str(skill)]
     cmd += [
-        "--provider", "mock",
-        "--model", "mock/mock-model",
+        "--provider", MOCK_PROVIDER,
+        "--model", MOCK_MODEL,
         "-p", "hello",
     ]
     for m in extra_messages or []:
@@ -173,44 +218,45 @@ def main() -> int:
     if not EXTENSION_PATH.exists():
         print(f"FAIL: extension not found at {EXTENSION_PATH}")
         return 1
-    if not PROVIDER_FIXTURE.exists():
-        print(f"FAIL: provider fixture not found at {PROVIDER_FIXTURE}")
-        return 1
     if not EXAMPLES_HELLO.exists():
         print(f"FAIL: hello example not found at {EXAMPLES_HELLO}")
         return 1
     if not shutil.which(PI_BIN):
         print(f"SKIP: {PI_BIN} not on PATH; set PI_BIN to override")
         return 0
+    if not fakeopenai.available():
+        print(f"SKIP: fake-openai binary not found at {fakeopenai.BIN}; "
+              "build ../fake-openai or set FAKE_OPENAI_BIN")
+        return 0
 
-    mock = MockOpenAIServer(stall_first_with_tools=True, stall_seconds=STALL_SECONDS)
-    mock.start()
-    print(f"mock server on {mock.base_url}")
+    fake, base_url, admin_url = start_fake_openai(
+        "--stall-first-with-tools", "--stall-seconds", str(STALL_SECONDS))
+    print(f"mock server on {base_url}")
 
     with tempfile.TemporaryDirectory(prefix="pi-evolve-test-") as tmp:
         ws = make_workspace(Path(tmp))
-        stdout, stderr = run_pi(ws, mock.base_url)
+        stdout, stderr = run_pi(ws, base_url)
 
         (ARTIFACTS / "pi_integration.stdout.log").write_text(stdout)
         (ARTIFACTS / "pi_integration.stderr.log").write_text(stderr)
-        mock.shutdown()
+        captured = fetch_captures(admin_url)
+        fake.terminate()
 
         # find chat (build) and heartbeat requests in the captured set
-        with mock.lock:
-            chat_req = next(
-                (c for c in mock.captured
-                 if "chat/completions" in c["path"]
-                 and c["body"].get("tools")
-                 and not is_heartbeat_request(c["body"])),
-                None,
-            )
-            hb_req = next(
-                (c for c in mock.captured
-                 if "chat/completions" in c["path"]
-                 and is_heartbeat_request(c["body"])),
-                None,
-            )
-            captured_paths = [c["path"] for c in mock.captured]
+        chat_req = next(
+            (c for c in captured
+             if "chat/completions" in c["path"]
+             and c["body"].get("tools")
+             and not is_heartbeat_request(c["body"])),
+            None,
+        )
+        hb_req = next(
+            (c for c in captured
+             if "chat/completions" in c["path"]
+             and is_heartbeat_request(c["body"])),
+            None,
+        )
+        captured_paths = [c["path"] for c in captured]
 
         if chat_req:
             (ARTIFACTS / "pi_integration.build_request.json").write_text(
@@ -333,7 +379,7 @@ def main() -> int:
                   heartbeat_body in hb_sys, hb_sys[:500])
             check("heartbeat: system prompt does NOT include chat stage body",
                   chat not in hb_sys, hb_sys[:500])
-            check("heartbeat: fresh session — only one user message in history",
+            check("heartbeat: fresh session -- only one user message in history",
                   len([m for m in hb_body.get("messages", []) if m.get("role") == "user"]) == 1,
                   f"user-role messages: {[m.get('content') for m in hb_body.get('messages', []) if m.get('role') == 'user']}")
             check("heartbeat: request carries tools",
@@ -345,17 +391,16 @@ def main() -> int:
     # evolve.ts intercepts via session_before_compact, runs hello's compacting
     # hook (which returns {}, signaling "use the contract default"), pulls the
     # contract's compaction.md content, and computes the summary by calling
-    # complete() — that LLM call hits the mock and we capture/assert on it.
-    cmock = MockOpenAIServer()
-    cmock.start()
-    print(f"\ncompaction mock server on {cmock.base_url}")
+    # complete() -- that LLM call hits the mock and we capture/assert on it.
+    cfake, cbase, cadmin = start_fake_openai()
+    print(f"\ncompaction mock server on {cbase}")
     try:
         with tempfile.TemporaryDirectory(prefix="pi-evolve-compact-") as tmp:
             ws = make_workspace(Path(tmp))
             sess_dir = Path(tmp) / "sessions"
             sess_dir.mkdir()
             stdout, stderr = run_pi(
-                ws, cmock.base_url,
+                ws, cbase,
                 extra_extensions=[TRIGGER_COMPACT_FIXTURE],
                 session_dir=sess_dir,
                 extra_messages=["/trigger-compact"],
@@ -365,27 +410,26 @@ def main() -> int:
             )
             (ARTIFACTS / "pi_integration.compaction.stdout.log").write_text(stdout)
             (ARTIFACTS / "pi_integration.compaction.stderr.log").write_text(stderr)
-            cmock.shutdown()
+            captured = fetch_captures(cadmin)
 
-            with cmock.lock:
-                # build = first chat/completions request with tools and no
-                # heartbeat. compaction = the chat/completions request whose
-                # user message contains hello's compaction.md sentinel.
-                requests = [c for c in cmock.captured if "chat/completions" in c["path"]]
-                build_cap = next((c for c in requests
-                                  if c["body"].get("tools")
-                                  and not is_heartbeat_request(c["body"])), None)
-                compaction_sentinel = HELLO_PROMPTS.joinpath("compaction.md").read_text().split("\n")[0].strip()
-                compact_cap = None
-                for c in requests:
-                    if c is build_cap:
-                        continue
-                    if compaction_sentinel and compaction_sentinel in extract_user_text(c["body"]):
-                        compact_cap = c
-                        break
+            # build = first chat/completions request with tools and no
+            # heartbeat. compaction = the chat/completions request whose
+            # user message contains hello's compaction.md sentinel.
+            requests = [c for c in captured if "chat/completions" in c["path"]]
+            build_cap = next((c for c in requests
+                              if c["body"].get("tools")
+                              and not is_heartbeat_request(c["body"])), None)
+            compaction_sentinel = HELLO_PROMPTS.joinpath("compaction.md").read_text().split("\n")[0].strip()
+            compact_cap = None
+            for c in requests:
+                if c is build_cap:
+                    continue
+                if compaction_sentinel and compaction_sentinel in extract_user_text(c["body"]):
+                    compact_cap = c
+                    break
 
             (ARTIFACTS / "pi_integration.compaction.captured.json").write_text(
-                json.dumps([c for c in cmock.captured], indent=2, default=str))
+                json.dumps(captured, indent=2, default=str))
 
             check("compaction: build chat request captured", build_cap is not None,
                   f"captured: {len(requests)} reqs")
@@ -405,11 +449,11 @@ def main() -> int:
                 check("compaction: LLM call has no tools array (summarization, not agent turn)",
                       not compact_cap["body"].get("tools"), repr(compact_cap["body"].get("tools")))
     finally:
-        cmock.shutdown()
+        cfake.terminate()
 
     # ─── scenario 3: EVOLVE_PRESERVE_SKILLS ────────────────────────────────
     # pi-evolve's mutate_request handler replaces the system prompt
-    # wholesale, which would drop Pi's stock available_skills block —
+    # wholesale, which would drop Pi's stock available_skills block --
     # breaking downstream extensions (e.g. pi-skillful) that target that
     # block by regex. The handler appends Pi's formatted skills section
     # back to the workspace-built prompt by default; opt out with
@@ -420,14 +464,13 @@ def main() -> int:
         ("preserve-skills default", {}, True),
         ("preserve-skills off", {"EVOLVE_PRESERVE_SKILLS": "0"}, False),
     ):
-        smock = MockOpenAIServer()
-        smock.start()
-        print(f"\n{label} mock server on {smock.base_url}")
+        sfake, sbase, sadmin = start_fake_openai()
+        print(f"\n{label} mock server on {sbase}")
         try:
             with tempfile.TemporaryDirectory(prefix="pi-evolve-skills-") as tmp:
                 ws = make_workspace(Path(tmp))
                 stdout, stderr = run_pi(
-                    ws, smock.base_url,
+                    ws, sbase,
                     extra_skills=[SKILL_FIXTURE_DIR],
                     extra_env={
                         "EVOLVE_HEARTBEAT_MS": "-1",
@@ -437,16 +480,15 @@ def main() -> int:
                 slug = label.replace(" ", "_")
                 (ARTIFACTS / f"pi_integration.skills_{slug}.stdout.log").write_text(stdout)
                 (ARTIFACTS / f"pi_integration.skills_{slug}.stderr.log").write_text(stderr)
-                smock.shutdown()
+                captured = fetch_captures(sadmin)
 
-                with smock.lock:
-                    s_chat = next(
-                        (c for c in smock.captured
-                         if "chat/completions" in c["path"]
-                         and c["body"].get("tools")
-                         and not is_heartbeat_request(c["body"])),
-                        None,
-                    )
+                s_chat = next(
+                    (c for c in captured
+                     if "chat/completions" in c["path"]
+                     and c["body"].get("tools")
+                     and not is_heartbeat_request(c["body"])),
+                    None,
+                )
 
                 check(f"skills [{label}]: build chat request captured", s_chat is not None,
                       f"stderr tail:\n{stderr[-500:]}")
@@ -475,7 +517,7 @@ def main() -> int:
                     check(f"skills [{label}]: fixture skill name absent",
                           not has_fixture, s_sys[-1500:])
         finally:
-            smock.shutdown()
+            sfake.terminate()
 
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1

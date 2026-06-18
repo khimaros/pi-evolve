@@ -6,7 +6,7 @@
  *
  * we can't use a `turn_end` handler in print mode: extension events emit
  * via an async queue, and print mode's `runtimeHost.dispose()` runs as soon
- * as `session.prompt` resolves — typically before the queued turn_end has
+ * as `session.prompt` resolves -- typically before the queued turn_end has
  * reached extensions, which invalidates the ctx.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

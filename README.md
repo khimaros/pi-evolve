@@ -21,7 +21,7 @@ pi install npm:@khimaros/pi-evolve
 or from a source checkout:
 
 ```bash
-make            # install deps + build
+make            # install deps + type-check (no build step)
 make install    # install globally from this checkout
 ```
 
@@ -46,7 +46,7 @@ $WORKSPACE/
 
 ```
 src/
-  extension/   pi extension entry — loads hook scripts, registers tools,
+  extension/   pi extension entry (.ts) -- loads hook scripts, registers tools,
                dispatches lifecycle stages (mutate_request, observe_message,
                before_stop, heartbeat, compacting, before_tool/after_tool,
                execute_tool, recover, format_notification)
@@ -54,12 +54,16 @@ tests/         python integration tests (spawn pi with this extension)
 examples/      reference hook workspaces
 ```
 
+pi-evolve is a pure extension with no standalone bin, so there is no build step:
+pi loads `src/extension/index.ts` straight from source through its bundled jiti
+loader. `make` type-checks it.
+
 ## development
 
 ```bash
-make            # install deps + build (tsc)
+make            # install deps + type-check (tsc, no emit)
 make lint       # tsc --noEmit
-make test       # build + run integration tests
+make test       # type-check + run integration tests
 make precommit  # lint + test
 make install    # install globally from this checkout
 make pack       # npm pack into build/
