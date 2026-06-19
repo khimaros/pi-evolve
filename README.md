@@ -51,8 +51,10 @@ src/
                before_stop, heartbeat, compacting, before_tool/after_tool,
                execute_tool, recover, format_notification)
 tests/         python integration tests (spawn pi with this extension)
-examples/      reference hook workspaces
 ```
+
+the canonical `hello` hook fixture lives in the hcp-spec repo
+(`conformance/fixtures/hello/`); the integration test runs against it directly.
 
 pi-evolve is a pure extension with no standalone bin, so there is no build step:
 pi loads `src/extension/index.ts` straight from source through its bundled jiti

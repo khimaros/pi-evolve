@@ -10,7 +10,7 @@
 - [ ] git auto-init of workspace + auto-commit after tool/heartbeat
 - [ ] permissions field passthrough -- pi has its own permission system; map `permission.arg` to pi's permission gate (or settle for "*" allow/deny initially)
 - [ ] expand integration test to cover before_stop continuation, heartbeat, observe_message, before_tool/after_tool, recover (current test asserts on dump-request payload only -- doesn't exercise the agent loop)
-- [ ] verify all of opencode-evolve's `examples/hello` hooks behave identically under pi-evolve (currently symlinked; pi-evolve passes the same prompts contract through)
+- [ ] verify all of the canonical `hello` hooks (hcp-spec `conformance/fixtures/hello`) behave identically under pi-evolve (pi-evolve passes the same prompts contract through)
 - [ ] hook protocol -- `before_tool.result` synthetic-skip support. pi has no API for this without a custom-tool path.
 - [ ] hook protocol -- `mutate_request.tools` payload. pi-coding-agent does not expose the tool list at the relevant hook point.
 - [ ] hook protocol -- `before_turn` / `after_turn` / `on_error` / `on_permission` stages.
